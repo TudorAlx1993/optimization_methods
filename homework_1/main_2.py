@@ -1,8 +1,8 @@
 import os
 import pickle
 import numpy as np
-import cvxpy as cp
 from scipy import optimize
+import matplotlib.pyplot as plt
 
 
 def main():
@@ -77,6 +77,27 @@ def save_results_to_txt_file_ex_1(A, b, my_results, x_star_numpy, output_dir):
     file = open(os.path.join(output_dir, 'results.txt'), 'w')
     file.write(file_content)
     file.close()
+
+    fig, (top_ax, bottom_ax) = plt.subplots(nrows=2, ncols=1, figsize=(15, 15))
+    for method in my_results.keys():
+        x_star = my_results[method]['x_star']
+        loss_x_star = objective_function_ex1(x_star, A, b)
+        loss_history = my_results[method]['loss_history']
+        centered_loss_history = [value - loss_x_star for value in loss_history]
+        gradient_norm_history = my_results[method]['gradient_norm_history']
+
+        top_ax.semilogy(range(len(loss_history)), centered_loss_history, label=method, linewidth=5.0)
+        top_ax.set_xlabel('Iteration')
+        top_ax.set_ylabel('Value')
+        top_ax.set_title('$f(x)-f(x*)$')
+        top_ax.legend()
+
+        bottom_ax.semilogy(range(len(gradient_norm_history)), gradient_norm_history, label=method, linewidth=5.0)
+        bottom_ax.set_xlabel('Iteration')
+        bottom_ax.set_ylabel('Value')
+        bottom_ax.set_title('$||gradient(f(x))||$')
+        bottom_ax.legend()
+    fig.savefig(os.path.join(output_dir, 'plots.png'))
 
 
 def minimize_function_with_gradient_ex_1(x_init, A, b, epsilon, method, alpha=None):
