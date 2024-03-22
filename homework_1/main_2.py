@@ -1,6 +1,7 @@
 import os
 import pickle
 import numpy as np
+import cvxpy as cp
 from scipy import optimize
 
 
@@ -9,8 +10,8 @@ def main():
     # np.random.seed(seed)
     output_dir = './outputs'
 
-    m = 200
-    n = 150
+    m = 75
+    n = 50
     min_k = 10 ** 5
     ex_1(m, n, min_k, output_dir)
 
@@ -22,11 +23,11 @@ def ex_1(m, n, min_k, output_dir, epsilon=10 ** -5):
 
     alpha = 2.0 / L * 0.9
     x_star_constant_step, no_iters_constant_step, grad_norm_hist_constant_step, loss_hist_constant_step = minimize_function_with_gradient_ex_1(
-        x_init, A, b, epsilon, 'constant_step', alpha)
+        x_init.copy(), A, b, epsilon, 'constant_step', alpha)
     x_star_ideal_step, no_iters_ideal_step, grad_norm_hist_ideal_step, loss_hist_ideal_step = minimize_function_with_gradient_ex_1(
-        x_init, A, b, epsilon, 'ideal_step')
+        x_init.copy(), A, b, epsilon, 'ideal_step', alpha)
     x_star_adaptive_step, no_iters_adaptive_step, grad_norm_hist_adaptive_step, loss_hist_adaptive_step = minimize_function_with_gradient_ex_1(
-        x_init, A, b, epsilon, 'adaptive_step')
+        x_init.copy(), A, b, epsilon, 'adaptive_step')
     x_star_numpy = np.linalg.lstsq(A, b, rcond=None)[0]
 
     my_results = {'constant_step': {'x_star': x_star_constant_step, 'no_iters': no_iters_constant_step,
@@ -62,6 +63,7 @@ def save_results_to_txt_file_ex_1(A, b, my_results, x_star_numpy, output_dir):
     file_content = 'My implementations:\n'
     for method in my_results.keys():
         file_content += '\t* method={}\n'.format(method)
+        file_content += '\t\t* convergence after no_iterations={}\n'.format(my_results[method]['no_iters'])
         file_content += '\t\t* x_star={}\n'.format(my_results[method]['x_star'].flatten())
         file_content += '\t\t* gradient norm of f(x_star)={}\n'.format(my_results[method]['gradient_norm_history'][-1])
         file_content += '\t\t* objective function in x_star={}\n'.format(
@@ -96,7 +98,7 @@ def minimize_function_with_gradient_ex_1(x_init, A, b, epsilon, method, alpha=No
         if method == 'constant_step' and type(alpha) is np.float64 and alpha.size == 1:
             x_current -= alpha * gradient_current
         elif method == 'ideal_step':
-            x_current -= alpha_ideal_ex_1(x_current, gradient_current, A, b) * gradient_current
+            x_current -= alpha_ideal_ex_1(x_current, gradient_current, A, b, alpha) * gradient_current
         elif method == 'adaptive_step':
             x_current -= alpha_adaptive_ex_1(x_current, gradient_current, A, b) * gradient_current
         else:
@@ -109,14 +111,13 @@ def minimize_function_with_gradient_ex_1(x_init, A, b, epsilon, method, alpha=No
     return x_current, iteration, gradient_norm_history, loss_history
 
 
-def alpha_ideal_ex_1(x, gradient, A, b):
+def alpha_ideal_ex_1(x, gradient, A, b, alpha_init):
     def objective_function(alpha, x, gradient, A, b):
         return objective_function_ex1(x - alpha * gradient, A, b)
 
     def constraint(alpha):
         return alpha
 
-    alpha_init = np.random.rand(1)
     optimization_result = optimize.minimize(fun=objective_function, x0=alpha_init, args=(x, gradient, A, b),
                                             constraints={'type': 'ineq', 'fun': constraint})
     alpha = optimization_result.x
