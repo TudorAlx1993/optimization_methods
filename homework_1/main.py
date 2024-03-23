@@ -8,16 +8,16 @@ from scipy import optimize
 
 def main():
     seed = 33
-    np.random.seed(seed)
+    # np.random.seed(seed)
     output_dir = './outputs'
 
     m = 75
     n = 50
     min_k = 10 ** 5
-    # ex_1(m, n, min_k, output_dir)
+    ex_1(m, n, min_k, output_dir)
 
-    m = 10
-    n = 2
+    # m = 50
+    # n = 7
     beta = 1.0
     ex_2(m, n, beta, output_dir)
 
@@ -25,20 +25,99 @@ def main():
 def ex_2(m, n, beta, output_dir, epsilon=10 ** -5):
     A, b = generate_inputs_ex_2(m, n)
     x_init = np.random.uniform(low=-1, high=1, size=n)
-    assert np.all(x_init > -1)
+    assert np.all(x_init > -1) and np.all(x_init < 1)
 
-    #x_star_constant_step, no_iters_constant_step, grad_norm_hist_constant_step, loss_hist_constant_step = minimize_function_with_newton_ex_2(
+    x_star_constant_step, no_iters_constant_step, grad_norm_hist_constant_step, obj_func_hist_constant_step = minimize_function_with_newton_ex_2(
+        x_init.copy(), beta, A, b,
+        epsilon, method='constant_step')
+    # x_star_adaptive_step, no_iters_adaptive_step, grad_norm_hist_adaptive_step, loss_hist_adaptive_step = minimize_function_with_newton_ex_2(
     #    x_init.copy(), beta, A, b,
-    #    epsilon, method='constant_step')
-    x_star_adaptive_step, no_iters_adaptive_step,grad_norm_hist_adaptive_step, loss_hist_adaptive_step = minimize_function_with_newton_ex_2(x_init.copy(), beta, A, b,
-                                                                                      epsilon, method='adaptive_step')
+    #    epsilon, method='adaptive_step')
 
-    #x_star_cvxpy = solve_ex_2_using_cvxpy(beta, A, b)
-    #assert np.all(x_star_cvxpy > -1) and np.all(x_star_cvxpy < 1)
+    x_star_cvxpy = solve_ex_2_using_cvxpy(beta, A, b)
+    assert np.all(x_star_cvxpy > -1) and np.all(x_star_cvxpy < 1)
 
-    #assert np.allclose(x_star_constant_step, x_star_cvxpy, atol=epsilon)
+    my_results = {'newton_constant_step':
+                      {'x_star': x_star_constant_step,
+                       'no_iters': no_iters_constant_step,
+                       'gradient_norm_history': grad_norm_hist_constant_step,
+                       'objective_function_history': obj_func_hist_constant_step}
+                  }
+    result_with_library = {'library_name': 'cvxpy',
+                           'x_star': x_star_cvxpy}
+
+    for method in my_results.keys():
+        assert np.allclose(my_results[method]['gradient_norm_history'][-1], 0.0, atol=epsilon) is True
+        assert np.allclose(my_results[method]['objective_function_history'][-1],
+                           objective_function_ex_2(x_star_cvxpy, beta, A, b),
+                           atol=epsilon) is True
+        assert np.allclose(my_results[method]['x_star'], x_star_cvxpy, atol=10 ** -4) is True
+
+    save_results_to_txt_file(my_results=my_results,
+                             result_with_library=result_with_library,
+                             gradient_function=gradient_function_ex_2,
+                             objective_function=objective_function_ex_2,
+                             exerise_no=2,
+                             output_dir=output_dir,
+                             beta=beta,
+                             A=A,
+                             b=b)
 
 
+def save_results_to_txt_file(my_results, result_with_library, gradient_function, objective_function, exerise_no,
+                             output_dir, **kwargs):
+    output_dir = os.path.join(output_dir, 'exercise_{}'.format(exerise_no))
+    if not os.path.isdir(output_dir):
+        os.makedirs(output_dir)
+
+    generated_data = {}
+    for object_name, object in kwargs.items():
+        generated_data[object_name] = object
+    file = open(os.path.join(output_dir, 'generated_data.pickle'), 'wb')
+    pickle.dump(generated_data, file, protocol=pickle.HIGHEST_PROTOCOL)
+    file.close()
+
+    file_content = 'My implementations:\n'
+    for method in my_results.keys():
+        file_content += '\t* method={}\n'.format(method)
+        file_content += '\t\t* convergence after no_iterations={}\n'.format(my_results[method]['no_iters'])
+        file_content += '\t\t* x_star={}\n'.format(my_results[method]['x_star'].flatten())
+        file_content += '\t\t* gradient norm of f(x_star)={}\n'.format(my_results[method]['gradient_norm_history'][-1])
+        file_content += '\t\t* objective function in x_star={}\n'.format(
+            my_results[method]['objective_function_history'][-1])
+
+    library_name = result_with_library['library_name']
+    x_star_with_library = result_with_library['x_star'].flatten()
+    file_content += '\t* implementation with {}\n'.format(library_name)
+    file_content += '\t\t* x_star={}\n'.format(x_star_with_library)
+    file_content += '\t\t* gradient norm of f(x_star)={}\n'.format(
+        np.linalg.norm(gradient_function(x_star_with_library, **kwargs)))
+    file_content += '\t\t* objective function in x_star={}\n'.format(objective_function(x_star_with_library, **kwargs))
+
+    file = open(os.path.join(output_dir, 'results.txt'), 'w')
+    file.write(file_content)
+    file.close()
+
+    fig, (top_ax, bottom_ax) = plt.subplots(nrows=2, ncols=1, figsize=(15, 15))
+    for method in my_results.keys():
+        x_star = my_results[method]['x_star']
+        objective_function_x_star = objective_function(x_star, **kwargs)
+        objective_function_history = my_results[method]['objective_function_history']
+        centered_loss_history = [value - objective_function_x_star for value in objective_function_history]
+        gradient_norm_history = my_results[method]['gradient_norm_history']
+
+        top_ax.semilogy(range(len(objective_function_history)), centered_loss_history, label=method, linewidth=5.0)
+        top_ax.set_xlabel('Iteration')
+        top_ax.set_ylabel('Value')
+        top_ax.set_title('$f(x)-f(x*)$')
+        top_ax.legend()
+
+        bottom_ax.semilogy(range(len(gradient_norm_history)), gradient_norm_history, label=method, linewidth=5.0)
+        bottom_ax.set_xlabel('Iteration')
+        bottom_ax.set_ylabel('Value')
+        bottom_ax.set_title('$||gradient(f(x))||$')
+        bottom_ax.legend()
+    fig.savefig(os.path.join(output_dir, 'plots.png'))
 
 
 def hessian_matrix_function_ex_2(x, beta, A, b):
@@ -92,7 +171,8 @@ def minimize_function_with_newton_ex_2(x_init, beta, A, b, epsilon, method):
             x_current = x_current - alpha * inv_hessian.dot(gradient)
         else:
             raise ValueError(
-                'algorithm not implemented for method={}! Parameter method should be constant_step or adaptive_step.')
+                'algorithm not implemented for method={}! Parameter method should be constant_step or adaptive_step.'.format(
+                    method))
 
         no_inters += 1
 
@@ -137,7 +217,8 @@ def solve_ex_2_using_cvxpy(beta, A, b):
     n = A.shape[1]
     x = cp.Variable(shape=n)
     min_of_objective_function = cp.Minimize(objective_function(x, beta, A, b))
-    constraints = [x >= -1, x <= 1]
+    # constraints = [x >= -1, x <= 1]
+    constraints = [x >= -1, x <= 1, b - A @ x >= 0]
     problem = cp.Problem(min_of_objective_function, constraints)
     problem.solve(solver=cp.CLARABEL)
     assert problem.status == 'optimal'
@@ -151,82 +232,46 @@ def ex_1(m, n, min_k, output_dir, epsilon=10 ** -5):
     x_init = np.random.randn(n)
 
     alpha = 2.0 / L * 0.9
-    x_star_constant_step, no_iters_constant_step, grad_norm_hist_constant_step, loss_hist_constant_step = minimize_function_with_gradient_ex_1(
+    x_star_constant_step, no_iters_constant_step, grad_norm_hist_constant_step, obj_func_hist_constant_step = minimize_function_with_gradient_ex_1(
         x_init.copy(), A, b, epsilon, 'constant_step', alpha)
-    x_star_ideal_step, no_iters_ideal_step, grad_norm_hist_ideal_step, loss_hist_ideal_step = minimize_function_with_gradient_ex_1(
+    x_star_ideal_step, no_iters_ideal_step, grad_norm_hist_ideal_step, obj_func_hist_ideal_step = minimize_function_with_gradient_ex_1(
         x_init.copy(), A, b, epsilon, 'ideal_step', alpha)
-    x_star_adaptive_step, no_iters_adaptive_step, grad_norm_hist_adaptive_step, loss_hist_adaptive_step = minimize_function_with_gradient_ex_1(
+    x_star_adaptive_step, no_iters_adaptive_step, grad_norm_hist_adaptive_step, obj_func_hist_adaptive_step = minimize_function_with_gradient_ex_1(
         x_init.copy(), A, b, epsilon, 'adaptive_step')
     x_star_numpy = np.linalg.lstsq(A, b, rcond=None)[0]
 
-    my_results = {'constant_step': {'x_star': x_star_constant_step, 'no_iters': no_iters_constant_step,
+    my_results = {'constant_step': {'x_star': x_star_constant_step,
+                                    'no_iters': no_iters_constant_step,
                                     'gradient_norm_history': grad_norm_hist_constant_step,
-                                    'loss_history': loss_hist_constant_step},
-                  'ideal_step': {'x_star': x_star_ideal_step, 'no_iters': no_iters_ideal_step,
+                                    'objective_function_history': obj_func_hist_constant_step},
+                  'ideal_step': {'x_star': x_star_ideal_step,
+                                 'no_iters': no_iters_ideal_step,
                                  'gradient_norm_history': grad_norm_hist_ideal_step,
-                                 'loss_history': loss_hist_ideal_step},
-                  'adaptive_step': {'x_star': x_star_adaptive_step, 'no_iters': no_iters_adaptive_step,
+                                 'objective_function_history': obj_func_hist_ideal_step},
+                  'adaptive_step': {'x_star': x_star_adaptive_step,
+                                    'no_iters': no_iters_adaptive_step,
                                     'gradient_norm_history': grad_norm_hist_adaptive_step,
-                                    'loss_history': loss_hist_adaptive_step}
+                                    'objective_function_history': obj_func_hist_adaptive_step}
                   }
+
+    result_with_library = {'library_name': 'np.linalg.lstsq',
+                           'x_star': x_star_numpy}
 
     for method in my_results.keys():
         assert np.allclose(my_results[method]['gradient_norm_history'][-1], 0.0, atol=epsilon) is True
-        assert np.allclose(my_results[method]['loss_history'][-1], objective_function_ex1(x_star_numpy, A, b),
+        assert np.allclose(my_results[method]['objective_function_history'][-1],
+                           objective_function_ex_1(x_star_numpy, A, b),
                            atol=epsilon) is True
         assert np.allclose(my_results[method]['x_star'], x_star_numpy, atol=epsilon) is True
 
-    save_results_to_txt_file_ex_1(A, b, my_results, x_star_numpy, output_dir)
-
-
-def save_results_to_txt_file_ex_1(A, b, my_results, x_star_numpy, output_dir):
-    output_dir = os.path.join(output_dir, 'exercise_1')
-    if not os.path.isdir(output_dir):
-        os.makedirs(output_dir)
-
-    generated_data = {'A': A, 'b': b}
-    file = open(os.path.join(output_dir, 'generated_data.pickle'), 'wb')
-    pickle.dump(generated_data, file, protocol=pickle.HIGHEST_PROTOCOL)
-    file.close()
-
-    file_content = 'My implementations:\n'
-    for method in my_results.keys():
-        file_content += '\t* method={}\n'.format(method)
-        file_content += '\t\t* convergence after no_iterations={}\n'.format(my_results[method]['no_iters'])
-        file_content += '\t\t* x_star={}\n'.format(my_results[method]['x_star'].flatten())
-        file_content += '\t\t* gradient norm of f(x_star)={}\n'.format(my_results[method]['gradient_norm_history'][-1])
-        file_content += '\t\t* objective function in x_star={}\n'.format(
-            my_results[method]['loss_history'][-1])
-    file_content += '\t* numpy implementation\n'
-    file_content += '\t\t* x_star={}\n'.format(x_star_numpy.flatten())
-    file_content += '\t\t* gradient norm of f(x_star)={}\n'.format(
-        np.linalg.norm(gradient_function_ex_1(x_star_numpy, A, b)))
-    file_content += '\t\t* objective function in x_star={}\n'.format(objective_function_ex1(x_star_numpy, A, b))
-
-    file = open(os.path.join(output_dir, 'results.txt'), 'w')
-    file.write(file_content)
-    file.close()
-
-    fig, (top_ax, bottom_ax) = plt.subplots(nrows=2, ncols=1, figsize=(15, 15))
-    for method in my_results.keys():
-        x_star = my_results[method]['x_star']
-        loss_x_star = objective_function_ex1(x_star, A, b)
-        loss_history = my_results[method]['loss_history']
-        centered_loss_history = [value - loss_x_star for value in loss_history]
-        gradient_norm_history = my_results[method]['gradient_norm_history']
-
-        top_ax.semilogy(range(len(loss_history)), centered_loss_history, label=method, linewidth=5.0)
-        top_ax.set_xlabel('Iteration')
-        top_ax.set_ylabel('Value')
-        top_ax.set_title('$f(x)-f(x*)$')
-        top_ax.legend()
-
-        bottom_ax.semilogy(range(len(gradient_norm_history)), gradient_norm_history, label=method, linewidth=5.0)
-        bottom_ax.set_xlabel('Iteration')
-        bottom_ax.set_ylabel('Value')
-        bottom_ax.set_title('$||gradient(f(x))||$')
-        bottom_ax.legend()
-    fig.savefig(os.path.join(output_dir, 'plots.png'))
+    save_results_to_txt_file(my_results=my_results,
+                             result_with_library=result_with_library,
+                             gradient_function=gradient_function_ex_1,
+                             objective_function=objective_function_ex_1,
+                             exerise_no=1,
+                             output_dir=output_dir,
+                             A=A,
+                             b=b)
 
 
 def minimize_function_with_gradient_ex_1(x_init, A, b, epsilon, method, alpha=None):
@@ -237,7 +282,7 @@ def minimize_function_with_gradient_ex_1(x_init, A, b, epsilon, method, alpha=No
     while True:
         gradient_current = gradient_function_ex_1(x_current, A, b)
 
-        loss_current = objective_function_ex1(x_current, A, b)
+        loss_current = objective_function_ex_1(x_current, A, b)
         loss_history.append(loss_current)
 
         gradient_current_norm = np.linalg.norm(gradient_current)
@@ -263,7 +308,7 @@ def minimize_function_with_gradient_ex_1(x_init, A, b, epsilon, method, alpha=No
 
 def alpha_ideal_ex_1(x, gradient, A, b, alpha_init):
     def objective_function(alpha, x, gradient, A, b):
-        return objective_function_ex1(x - alpha * gradient, A, b)
+        return objective_function_ex_1(x - alpha * gradient, A, b)
 
     def constraint(alpha):
         return alpha
@@ -278,8 +323,8 @@ def alpha_ideal_ex_1(x, gradient, A, b, alpha_init):
 def alpha_adaptive_ex_1(x, gradient, A, b):
     c, rho, alpha = np.random.rand(3)
 
-    while (objective_function_ex1(x - alpha * gradient, A, b)) > (
-            objective_function_ex1(x, A, b) - c * alpha * np.linalg.norm(gradient) ** 2):
+    while (objective_function_ex_1(x - alpha * gradient, A, b)) > (
+            objective_function_ex_1(x, A, b) - c * alpha * np.linalg.norm(gradient) ** 2):
         alpha = rho * alpha
 
     return alpha
@@ -291,7 +336,7 @@ def gradient_function_ex_1(x, A, b):
     return gradient
 
 
-def objective_function_ex1(x, A, b):
+def objective_function_ex_1(x, A, b):
     loss = 0.5 * np.linalg.norm(np.matmul(A, x) - b) ** 2
 
     return loss
