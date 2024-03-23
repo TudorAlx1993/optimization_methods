@@ -1,4 +1,7 @@
+import os
+import pickle
 import numpy as np
+import matplotlib.pyplot as plt
 import cvxpy as cp
 from scipy import optimize
 
@@ -6,80 +9,265 @@ from scipy import optimize
 def main():
     seed = 33
     np.random.seed(seed)
+    output_dir = './outputs'
 
-    m = 70
+    m = 75
     n = 50
     min_k = 10 ** 5
-    ex_1(m, n, min_k)
+    # ex_1(m, n, min_k, output_dir)
+
+    m = 10
+    n = 2
+    beta = 1.0
+    ex_2(m, n, beta, output_dir)
 
 
-def ex_1(m, n, min_k, epsilon=10 ** -5):
-    A, b, L = generate_inputs_exercise_1(m, n, min_k)
+def ex_2(m, n, beta, output_dir, epsilon=10 ** -5):
+    A, b = generate_inputs_ex_2(m, n)
+    x_init = np.random.uniform(low=-1, high=1, size=n)
+    assert np.all(x_init > -1)
 
-    #x_init = np.random.rand(n, 1).astype(np.float64)
-    x_init = np.zeros((n,1)).astype(np.float64)
+    #x_star_constant_step, no_iters_constant_step, grad_norm_hist_constant_step, loss_hist_constant_step = minimize_function_with_newton_ex_2(
+    #    x_init.copy(), beta, A, b,
+    #    epsilon, method='constant_step')
+    x_star_adaptive_step, no_iters_adaptive_step,grad_norm_hist_adaptive_step, loss_hist_adaptive_step = minimize_function_with_newton_ex_2(x_init.copy(), beta, A, b,
+                                                                                      epsilon, method='adaptive_step')
 
-    alpha = 0.1
-    k_constant_step, x_star_constant_step, gradient_x_star_constant_step = gradient_method_constant_step_ex_1(x_init, A,
-                                                                                                              b,
-                                                                                                              epsilon,
-                                                                                                              alpha)
-    #k_ideal_step, x_star_ideal_step, gradient_x_star_ideal_step = gradient_method_ideal_step_ex_1(x_init, A, b, epsilon)
-    #k_adaptive_step, x_star_adaptive_step, gradient_x_star_adaptive_step = gradient_method_adaptive_step_ex_1(x_init, A,
-    #                                                                                                          b,
-    #                                                                                                          epsilon)
+    #x_star_cvxpy = solve_ex_2_using_cvxpy(beta, A, b)
+    #assert np.all(x_star_cvxpy > -1) and np.all(x_star_cvxpy < 1)
 
-    #x_star_scipy = np.linalg.lstsq(A, b)[0].reshape(-1, 1)
+    #assert np.allclose(x_star_constant_step, x_star_cvxpy, atol=epsilon)
 
-    #print(x_star_scipy.flatten())
-    #print(x_star_adaptive_step.flatten())
-    #print(np.linalg.norm(gradient_function_ex_1(x_star_scipy, A, b)) ** 2)
-    #print(np.linalg.norm(gradient_function_ex_1(x_star_adaptive_step, A, b)) ** 2)
 
-def gradient_method_adaptive_step_ex_1(x_init, A, b, epsilon):
-    k = 0
+
+
+def hessian_matrix_function_ex_2(x, beta, A, b):
+    hessian_matrix = np.diag(np.full_like(x, fill_value=beta)) + np.diag(1 / (1 + x) ** 2) + np.diag(1 / (1 - x) ** 2)
+
+    d = 1.0 / (b - A.dot(x))
+    diag_matrix_of_d = np.diag(d)
+    last_term = np.matmul(np.matmul(A.transpose(), np.matmul(diag_matrix_of_d, diag_matrix_of_d)), A)
+
+    hessian_matrix += last_term
+
+    return hessian_matrix
+
+
+def gradient_function_ex_2(x, beta, A, b):
+    gradient = beta * x - 1 / (1 + x) + 1 / (1 - x) + A.transpose().dot(1.0 / (b - A.dot(x)))
+
+    return gradient
+
+
+def objective_function_ex_2(x, beta, A, b):
+    objective_function = (beta / 2) * np.linalg.norm(x) ** 2 - np.sum(np.log(x + 1)) - np.sum(np.log(1 - x)) - np.sum(
+        np.log(b - A.dot(x)))
+
+    return objective_function
+
+
+def minimize_function_with_newton_ex_2(x_init, beta, A, b, epsilon, method):
+    no_inters = 0
     x_current = x_init
-    gradient_current = gradient_function_ex_1(x_current, A, b)
-    while np.linalg.norm(gradient_current) > epsilon:
-        alpha_adaptive = alpha_adaptive_ex_1(x_current, gradient_current, A, b)
-        x_current = x_current - alpha_adaptive * gradient_current
-        gradient_current = gradient_function_ex_1(x_current, A, b)
-        k += 1
+    gradient_norm_history = []
+    objective_function_history = []
+    while True:
+        gradient = gradient_function_ex_2(x_current, beta, A, b)
+        hessian = hessian_matrix_function_ex_2(x_current, beta, A, b)
+        inv_hessian = np.linalg.inv(hessian)
 
-    return k, x_current, gradient_current
+        gradient_norm = np.linalg.norm(gradient)
+        gradient_norm_history.append(gradient_norm)
+
+        objective_function = objective_function_ex_2(x_current, beta, A, b)
+        objective_function_history.append(objective_function)
+
+        if gradient_norm < epsilon:
+            break
+
+        if method == 'constant_step':
+            x_current = x_current - inv_hessian.dot(gradient)
+        elif method == 'adaptive_step':
+            alpha = alpha_adaptive_ex_2(x_current, gradient, inv_hessian, beta, A, b)
+            x_current = x_current - alpha * inv_hessian.dot(gradient)
+        else:
+            raise ValueError(
+                'algorithm not implemented for method={}! Parameter method should be constant_step or adaptive_step.')
+
+        no_inters += 1
+
+    return x_current, no_inters, gradient_norm_history, objective_function_history
 
 
-def alpha_adaptive_ex_1(x, gradient, A, b):
+def alpha_adaptive_ex_2(x, gradient, inv_hessian, beta, A, b):
     c, rho, alpha = np.random.rand(3)
 
-    while (loss_function_ex_1(x - alpha * gradient, A, b)) > (
-            loss_function_ex_1(x, A, b) - c * alpha * np.linalg.norm(gradient) ** 2):
+    left_side = objective_function_ex_2(x - alpha * gradient, beta, A, b)
+    right_side = objective_function_ex_2(x, beta, A, b) - c * alpha * gradient.dot(inv_hessian).dot(gradient)
+    while left_side > right_side:
         alpha = rho * alpha
 
     return alpha
 
 
-def gradient_method_ideal_step_ex_1(x_init, A, b, epsilon):
-    k = 0
+def generate_inputs_ex_2(m, n):
+    # generez intial A si B din distributia uniforma pe intervalul [0,1)
+    A = np.random.uniform(low=0, high=1, size=(m, n))
+    b = np.random.uniform(low=0, high=1, size=(m))
+
+    # deaorece fiecare termen din x este in intervalul (-1,1) rezulta ca primii doi logaritmi din functia de minimizat sunt definiti
+    # trebuie sa ma asigur ca fiecare element din vectorul Ax este strict mai mic ca elementul corespunzator din vectorul b
+    # stim ca fiecare element din vectorul x este din intervalul (-1,1)
+    # deci pentru fiecare element din x, avem x[i]<1
+    x_max = np.ones(shape=A.shape[1])
+    while True:
+        if np.all(A.dot(x_max) < b):
+            break
+        b += np.random.uniform(low=0, high=1, size=(m))
+
+    return A, b
+
+
+def solve_ex_2_using_cvxpy(beta, A, b):
+    def objective_function(x, beta, A, b):
+        function = beta / 2 * cp.norm(x) ** 2 - cp.sum(cp.log(x + 1)) - cp.sum(cp.log(1 - x)) - cp.sum(
+            cp.log(b - A @ x))
+        return function
+
+    n = A.shape[1]
+    x = cp.Variable(shape=n)
+    min_of_objective_function = cp.Minimize(objective_function(x, beta, A, b))
+    constraints = [x >= -1, x <= 1]
+    problem = cp.Problem(min_of_objective_function, constraints)
+    problem.solve(solver=cp.CLARABEL)
+    assert problem.status == 'optimal'
+
+    return x.value
+
+
+def ex_1(m, n, min_k, output_dir, epsilon=10 ** -5):
+    A, b, L = generate_inputs_ex_1(m, n, min_k)
+
+    x_init = np.random.randn(n)
+
+    alpha = 2.0 / L * 0.9
+    x_star_constant_step, no_iters_constant_step, grad_norm_hist_constant_step, loss_hist_constant_step = minimize_function_with_gradient_ex_1(
+        x_init.copy(), A, b, epsilon, 'constant_step', alpha)
+    x_star_ideal_step, no_iters_ideal_step, grad_norm_hist_ideal_step, loss_hist_ideal_step = minimize_function_with_gradient_ex_1(
+        x_init.copy(), A, b, epsilon, 'ideal_step', alpha)
+    x_star_adaptive_step, no_iters_adaptive_step, grad_norm_hist_adaptive_step, loss_hist_adaptive_step = minimize_function_with_gradient_ex_1(
+        x_init.copy(), A, b, epsilon, 'adaptive_step')
+    x_star_numpy = np.linalg.lstsq(A, b, rcond=None)[0]
+
+    my_results = {'constant_step': {'x_star': x_star_constant_step, 'no_iters': no_iters_constant_step,
+                                    'gradient_norm_history': grad_norm_hist_constant_step,
+                                    'loss_history': loss_hist_constant_step},
+                  'ideal_step': {'x_star': x_star_ideal_step, 'no_iters': no_iters_ideal_step,
+                                 'gradient_norm_history': grad_norm_hist_ideal_step,
+                                 'loss_history': loss_hist_ideal_step},
+                  'adaptive_step': {'x_star': x_star_adaptive_step, 'no_iters': no_iters_adaptive_step,
+                                    'gradient_norm_history': grad_norm_hist_adaptive_step,
+                                    'loss_history': loss_hist_adaptive_step}
+                  }
+
+    for method in my_results.keys():
+        assert np.allclose(my_results[method]['gradient_norm_history'][-1], 0.0, atol=epsilon) is True
+        assert np.allclose(my_results[method]['loss_history'][-1], objective_function_ex1(x_star_numpy, A, b),
+                           atol=epsilon) is True
+        assert np.allclose(my_results[method]['x_star'], x_star_numpy, atol=epsilon) is True
+
+    save_results_to_txt_file_ex_1(A, b, my_results, x_star_numpy, output_dir)
+
+
+def save_results_to_txt_file_ex_1(A, b, my_results, x_star_numpy, output_dir):
+    output_dir = os.path.join(output_dir, 'exercise_1')
+    if not os.path.isdir(output_dir):
+        os.makedirs(output_dir)
+
+    generated_data = {'A': A, 'b': b}
+    file = open(os.path.join(output_dir, 'generated_data.pickle'), 'wb')
+    pickle.dump(generated_data, file, protocol=pickle.HIGHEST_PROTOCOL)
+    file.close()
+
+    file_content = 'My implementations:\n'
+    for method in my_results.keys():
+        file_content += '\t* method={}\n'.format(method)
+        file_content += '\t\t* convergence after no_iterations={}\n'.format(my_results[method]['no_iters'])
+        file_content += '\t\t* x_star={}\n'.format(my_results[method]['x_star'].flatten())
+        file_content += '\t\t* gradient norm of f(x_star)={}\n'.format(my_results[method]['gradient_norm_history'][-1])
+        file_content += '\t\t* objective function in x_star={}\n'.format(
+            my_results[method]['loss_history'][-1])
+    file_content += '\t* numpy implementation\n'
+    file_content += '\t\t* x_star={}\n'.format(x_star_numpy.flatten())
+    file_content += '\t\t* gradient norm of f(x_star)={}\n'.format(
+        np.linalg.norm(gradient_function_ex_1(x_star_numpy, A, b)))
+    file_content += '\t\t* objective function in x_star={}\n'.format(objective_function_ex1(x_star_numpy, A, b))
+
+    file = open(os.path.join(output_dir, 'results.txt'), 'w')
+    file.write(file_content)
+    file.close()
+
+    fig, (top_ax, bottom_ax) = plt.subplots(nrows=2, ncols=1, figsize=(15, 15))
+    for method in my_results.keys():
+        x_star = my_results[method]['x_star']
+        loss_x_star = objective_function_ex1(x_star, A, b)
+        loss_history = my_results[method]['loss_history']
+        centered_loss_history = [value - loss_x_star for value in loss_history]
+        gradient_norm_history = my_results[method]['gradient_norm_history']
+
+        top_ax.semilogy(range(len(loss_history)), centered_loss_history, label=method, linewidth=5.0)
+        top_ax.set_xlabel('Iteration')
+        top_ax.set_ylabel('Value')
+        top_ax.set_title('$f(x)-f(x*)$')
+        top_ax.legend()
+
+        bottom_ax.semilogy(range(len(gradient_norm_history)), gradient_norm_history, label=method, linewidth=5.0)
+        bottom_ax.set_xlabel('Iteration')
+        bottom_ax.set_ylabel('Value')
+        bottom_ax.set_title('$||gradient(f(x))||$')
+        bottom_ax.legend()
+    fig.savefig(os.path.join(output_dir, 'plots.png'))
+
+
+def minimize_function_with_gradient_ex_1(x_init, A, b, epsilon, method, alpha=None):
+    iteration = 0
+    gradient_norm_history = []
+    loss_history = []
     x_current = x_init
-    gradient_current = gradient_function_ex_1(x_current, A, b)
-    while np.linalg.norm(gradient_current) > epsilon:
-        alpha_ideal = alpha_ideal_ex_1(x_current, gradient_current, A, b)
-        x_current = x_current - alpha_ideal * gradient_current
+    while True:
         gradient_current = gradient_function_ex_1(x_current, A, b)
-        k += 1
 
-    return k, x_current, gradient_current
+        loss_current = objective_function_ex1(x_current, A, b)
+        loss_history.append(loss_current)
+
+        gradient_current_norm = np.linalg.norm(gradient_current)
+        gradient_norm_history.append(gradient_current_norm)
+        if gradient_current_norm < epsilon:
+            break
+
+        if method == 'constant_step' and type(alpha) is np.float64 and alpha.size == 1:
+            x_current -= alpha * gradient_current
+        elif method == 'ideal_step':
+            x_current -= alpha_ideal_ex_1(x_current, gradient_current, A, b, alpha) * gradient_current
+        elif method == 'adaptive_step':
+            x_current -= alpha_adaptive_ex_1(x_current, gradient_current, A, b) * gradient_current
+        else:
+            raise ValueError(
+                'algorithm not implemented for method={}! Method should be one of the following values: constant_step, ideal_step or adaptive_step. If method=constant_step then paramter alpha should be a float.'.format(
+                    method))
+
+        iteration += 1
+
+    return x_current, iteration, gradient_norm_history, loss_history
 
 
-def alpha_ideal_ex_1(x, gradient, A, b):
+def alpha_ideal_ex_1(x, gradient, A, b, alpha_init):
     def objective_function(alpha, x, gradient, A, b):
-        return loss_function_ex_1(x - alpha * gradient, A, b)
+        return objective_function_ex1(x - alpha * gradient, A, b)
 
     def constraint(alpha):
         return alpha
 
-    alpha_init = np.random.rand(1)
     optimization_result = optimize.minimize(fun=objective_function, x0=alpha_init, args=(x, gradient, A, b),
                                             constraints={'type': 'ineq', 'fun': constraint})
     alpha = optimization_result.x
@@ -87,52 +275,40 @@ def alpha_ideal_ex_1(x, gradient, A, b):
     return alpha
 
 
-def gradient_method_constant_step_ex_1(x_init, A, b, epsilon, alfa):
-    k = 0
-    x_current = x_init
-    gradient_current = gradient_function_ex_1(x_current, A, b)
-    while np.linalg.norm(gradient_current) > epsilon:
-        x_current = x_current - alfa * gradient_current
-        #print('x_current={}'.format(x_current.shape))
-        print(x_init.shape)
-        gradient_current = gradient_function_ex_1(x_current, A, b)
-        k += 1
+def alpha_adaptive_ex_1(x, gradient, A, b):
+    c, rho, alpha = np.random.rand(3)
 
-    return k, x_current, gradient_current
+    while (objective_function_ex1(x - alpha * gradient, A, b)) > (
+            objective_function_ex1(x, A, b) - c * alpha * np.linalg.norm(gradient) ** 2):
+        alpha = rho * alpha
+
+    return alpha
 
 
 def gradient_function_ex_1(x, A, b):
-    #gradient = np.matmul(A.transpose(), np.matmul(A, x) - b.reshape(-1, 1))
-    gradient=A.T.dot(A.dot(x)-b)
+    gradient = np.matmul(A.transpose(), np.matmul(A, x) - b)
 
     return gradient
 
 
-def loss_function_ex_1(x, A, b):
-    loss = (1.0 / 2.0) * np.linalg.norm(np.matmul(A, x) - b.reshape(-1, 1)) ** 2
+def objective_function_ex1(x, A, b):
+    loss = 0.5 * np.linalg.norm(np.matmul(A, x) - b) ** 2
 
     return loss
 
 
-def generate_inputs_exercise_1(m, n, min_k):
-    A = np.random.rand(m, n).astype(np.float64)
-    b = np.random.rand(m,1).astype(np.float64)
+def generate_inputs_ex_1(m, n, min_k):
+    A = np.random.randn(m, n)
+    b = np.random.randn(m)
 
-    return A, b, None
+    hessian_matrix = np.matmul(A.transpose(), A)
 
-    while True:
-        hessian_matrix = np.matmul(A.transpose(), A)
+    eigenvalues = np.linalg.eigvals(hessian_matrix)
+    assert np.all(eigenvalues > 0)
 
-        eigenvalues = np.linalg.eigvals(hessian_matrix)
-        assert np.all(eigenvalues > 0)
-
-        min_eigenvalue = np.min(eigenvalues)
-        max_eigenvalue = np.max(eigenvalues)
-        k = max_eigenvalue / min_eigenvalue
-
-        if k > min_k:
-            break
-        A[0] *= 2
+    min_eigenvalue = np.min(eigenvalues)
+    max_eigenvalue = np.max(eigenvalues)
+    k = max_eigenvalue / min_eigenvalue
 
     k_numpy = np.linalg.cond(hessian_matrix)
     assert np.allclose(k, k_numpy)
