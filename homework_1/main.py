@@ -34,7 +34,7 @@ def ex_2(m, n, beta, output_dir, epsilon=10 ** -5):
     #    x_init.copy(), beta, A, b,
     #    epsilon, method='adaptive_step')
 
-    x_star_cvxpy = solve_ex_2_using_cvxpy(beta, A, b)
+    x_star_cvxpy = solve_ex_2_using_cvxpy(beta, A, b,epsilon)
     assert np.all(x_star_cvxpy > -1) and np.all(x_star_cvxpy < 1)
 
     my_results = {'newton_constant_step':
@@ -51,7 +51,7 @@ def ex_2(m, n, beta, output_dir, epsilon=10 ** -5):
         assert np.allclose(my_results[method]['objective_function_history'][-1],
                            objective_function_ex_2(x_star_cvxpy, beta, A, b),
                            atol=epsilon) is True
-        assert np.allclose(my_results[method]['x_star'], x_star_cvxpy, atol=10 ** -4) is True
+        assert np.allclose(my_results[method]['x_star'], x_star_cvxpy, atol=epsilon) is True
 
     save_results_to_txt_file(my_results=my_results,
                              result_with_library=result_with_library,
@@ -208,7 +208,7 @@ def generate_inputs_ex_2(m, n):
     return A, b
 
 
-def solve_ex_2_using_cvxpy(beta, A, b):
+def solve_ex_2_using_cvxpy(beta, A, b,epsilon):
     def objective_function(x, beta, A, b):
         function = beta / 2 * cp.norm(x) ** 2 - cp.sum(cp.log(x + 1)) - cp.sum(cp.log(1 - x)) - cp.sum(
             cp.log(b - A @ x))
@@ -220,7 +220,8 @@ def solve_ex_2_using_cvxpy(beta, A, b):
     # constraints = [x >= -1, x <= 1]
     constraints = [x >= -1, x <= 1, b - A @ x >= 0]
     problem = cp.Problem(min_of_objective_function, constraints)
-    problem.solve(solver=cp.CLARABEL)
+    solver_parameters = {'abstol': epsilon,'reltol': epsilon}
+    problem.solve(solver=cp.ECOS,**solver_parameters)
     assert problem.status == 'optimal'
 
     return x.value
