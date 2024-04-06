@@ -21,13 +21,13 @@ def main():
     p = 0.5
     b = 1.0
     epsilon = 10 ** -6
-    lambda_values = [1, 5.5, 10, 14, 30, 100]
     D_matrix = generate_D_matrix(n)
 
     # punctul a)
     x, y, z, v = generate_inputs(x_init, n, mean, sigma, p, b, output_dir)
 
     # punctul b)
+    lambda_values = [1, 5, 10, 20, 30, 100]
     x_star_cvxpy = {}
     for lambda_value in lambda_values:
         x_star_cvxpy[lambda_value] = generate_trend_using_cvxpy(y, D_matrix, lambda_value, epsilon)
@@ -42,10 +42,10 @@ def main():
                        output_dir=os.path.join(output_dir, 'l1_filtering_with_cvxpy'))
 
     # punctul c)
-    x_star_l1={}
+    x_star_l1 = {}
+    lambda_values = [1, 5.5, 10, 14, 30]
     for lambda_value in lambda_values:
-        print(lambda_value)
-        x_star_l1[lambda_value]=generate_trend_with_l1_filter(y, D_matrix, lambda_value, epsilon)
+        x_star_l1[lambda_value] = generate_trend_with_l1_filter(y, D_matrix, lambda_value, epsilon, 'constant')
     save_data_to_pickle_file(data={'lambda_to_trend_star_dict': x_star_l1},
                              file_name='data.pickle',
                              output_dir=os.path.join(output_dir, 'l1_filtering_my_implementation'))
@@ -59,6 +59,7 @@ def main():
 
     # punctul d)
     x_star_hp = {}
+    lambda_values = [1, 5.5, 10, 14, 30]
     for lambda_value in lambda_values:
         x_star_hp[lambda_value] = generate_trend_using_hp_filter(y, D_matrix, lambda_value)
     save_data_to_pickle_file(data={'lambda_to_trend_star_dict': x_star_hp},
@@ -73,10 +74,48 @@ def main():
                        output_dir=os.path.join(output_dir, 'efficient_hp_filtering'))
 
     # punctul e)
-    # TODO
+    plot_l1_vs_hp_trend_filtering(x_star_l1, x_star_hp, x, 'l1_vs_hp.png',
+                                  os.path.join(output_dir, 'l1_vs_hp_trend_filtering'))
 
 
-def generate_trend_with_l1_filter(y, D_matrix, lambda_value, epsilon):
+def plot_l1_vs_hp_trend_filtering(lambda_to_trend_star_dict_l1, lambda_to_trend_star_dict_hp, x_original,
+                                  file_name, output_dir):
+    if type(lambda_to_trend_star_dict_l1) is not dict:
+        raise ValueError(
+            'parameter lambda_to_trend_star_dict_l1 should be a dict where the keys are denoting the smoothing parameters lambda and the values are denoting the corresponding optimal trends!')
+    if type(lambda_to_trend_star_dict_hp) is not dict:
+        raise ValueError(
+            'parameter lambda_to_trend_star_dict_hp should be a dict where the keys are denoting the smoothing parameters lambda and the values are denoting the corresponding optimal trends!')
+
+    lambda_values_l1 = sorted(list(lambda_to_trend_star_dict_l1.keys()))
+    lambda_values_hp = sorted(list(lambda_to_trend_star_dict_hp.keys()))
+    if not (lambda_values_l1 == lambda_values_hp):
+        raise ValueError(
+            'the dictionaries lambda_to_trend_star_dict_l1 and lambda_to_trend_star_dict_hp should have the same keys (smoothing parameters)!')
+
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+
+    if not file_name.endswith('.png'):
+        file_name += '.png'
+
+    fig, axes = plt.subplots(nrows=len(lambda_values_l1), ncols=1, figsize=(8, 20))
+    for ax, lambda_value in zip(axes, lambda_values_l1):
+        x_star_l1 = lambda_to_trend_star_dict_l1[lambda_value]
+        x_star_hp = lambda_to_trend_star_dict_hp[lambda_value]
+
+        ax.plot(x_star_l1, label='Trend L1')
+        ax.plot(x_star_hp, label='Trend HP')
+        ax.plot(x_original, label='Original trend')
+        ax.set_xlabel('Time')
+        ax.set_ylabel('Trend')
+        ax.set_title('L1 vs HP filtering lambda={}'.format(lambda_value))
+        ax.legend()
+    fig.tight_layout()
+    fig.savefig(os.path.join(output_dir, file_name))
+
+
+def generate_trend_with_l1_filter(y, D_matrix, lambda_value, epsilon, method):
     if not (type(y) is np.ndarray and y.ndim == 1):
         raise ValueError('parameter y should be a 1D numpy array!')
     n = y.shape[0]
@@ -94,7 +133,8 @@ def generate_trend_with_l1_filter(y, D_matrix, lambda_value, epsilon):
                                                                                                  D_matrix,
                                                                                                  lambda_value,
                                                                                                  alpha,
-                                                                                                 epsilon)
+                                                                                                 epsilon,
+                                                                                                 method)
 
     # testez x_star din implementarea mea cu x_star obtinuta cu cvxpy
     # folosesc atol=10 ** -3 si rtol=10 ** -3 deoarece implementarea mea e mai exacta ca cea facuta cu cvxpy
@@ -103,7 +143,7 @@ def generate_trend_with_l1_filter(y, D_matrix, lambda_value, epsilon):
     # arat ca implementarea proprie este chiar mai exacta decat cea realizata de cvxpy
     miu_star_cvxpy_gradient = gradient_trend_with_l1(miu_star_cvxpy, y, D_matrix)
     miu_star_my_solution_gradient = gradient_trend_with_l1(miu_star_my_solution, y, D_matrix)
-    #assert np.linalg.norm(miu_star_my_solution_gradient) < np.linalg.norm(miu_star_cvxpy_gradient)
+    # assert np.linalg.norm(miu_star_my_solution_gradient) < np.linalg.norm(miu_star_cvxpy_gradient)
 
     miu_star_cvxpy_modified_gradient = modified_gradient_trend_with_l1(miu_star_cvxpy, miu_star_cvxpy_gradient, alpha,
                                                                        lambda_value)
@@ -140,7 +180,13 @@ def modified_gradient_trend_with_l1(miu, gradient, alpha, lambda_value):
     return modified_gradient
 
 
-def generate_trend_with_l1_filter_gradient_descent(y, D_matrix, lambda_value, alpha, epsilon):
+def generate_trend_with_l1_filter_gradient_descent(y, D_matrix, lambda_value, alpha, epsilon, method):
+    if method not in ['backtracking', 'constant']:
+        raise ValueError('algorithm not implemented for method={}!'.format(method))
+    if method == "constant":
+        if not (type(alpha) is np.float64 and alpha > 0):
+            raise ValueError('the learning rate should be a strictly positive real number!')
+
     n = y.shape[0]
     assert D_matrix.shape == (n - 2, n)
 
@@ -149,6 +195,10 @@ def generate_trend_with_l1_filter_gradient_descent(y, D_matrix, lambda_value, al
 
     while True:
         gradient = gradient_trend_with_l1(miu_current, y, D_matrix)
+
+        if method == 'backtracking':
+            alpha = generate_alpha_backtracking(miu_current, gradient, D_matrix, y, lambda_value)
+
         modified_gradient = modified_gradient_trend_with_l1(miu_current, gradient, alpha, lambda_value)
 
         modified_gradient_norm = np.linalg.norm(modified_gradient)
@@ -164,6 +214,29 @@ def generate_trend_with_l1_filter_gradient_descent(y, D_matrix, lambda_value, al
     x_star = y - D_matrix.transpose().dot(miu_star)
 
     return x_star, miu_star, iterations
+
+
+def generate_alpha_backtracking(miu, gradient, D_matrix, y, lambda_value):
+    c, rho, alpha = np.random.rand(3)
+
+    while True:
+        modified_gradient = modified_gradient_trend_with_l1(miu, gradient, alpha, lambda_value)
+        left_side = objective_function_trend_with_l1(miu - alpha * modified_gradient, D_matrix, y)
+        right_side = objective_function_trend_with_l1(miu, D_matrix, y) - c * alpha * np.linalg.norm(
+            modified_gradient) ** 2
+
+        if left_side <= right_side:
+            break
+
+        alpha = rho * alpha
+
+    return alpha
+
+
+def objective_function_trend_with_l1(miu, D_matrix, y):
+    obj_function = 0.5 * np.linalg.norm(D_matrix.transpose().dot(miu)) ** 2 - np.sum(miu * (D_matrix.dot(y)))
+
+    return obj_function
 
 
 def gradient_trend_with_l1(miu, y, D_matrix):
@@ -214,7 +287,7 @@ def generate_trend_using_hp_filter(y, D_matrix, lambda_value):
     # A este pozitiv definita -> toate valorile proprii sunt strict mai mari ca 0
     A_eigenvalues = np.linalg.eigvals(A)
     assert np.all(A_eigenvalues > 0)
-    # A este o matrice cu exact 5 diagonale indiferent pentru orice n>=5
+    # A este o matrice cu exact 5 diagonale pentru orice n>=5
     #   * o diagonala principala
     #   * doua supra diagonale
     #   * doua sub diagonale
@@ -222,7 +295,7 @@ def generate_trend_using_hp_filter(y, D_matrix, lambda_value):
     no_under_diagonals = np.sum(A[:, 0] != 0) - 1
     assert no_over_diagonals == 2 and no_under_diagonals == 2
     # matricea A mai este cunoscuta si ca o matrice pentadiagonala
-    # in scipy matricea pentadiagonala este un caz particular pentru banded matrices (matrice formata din benzi adica din mai multe diagonale)
+    # in scipy matricea pentadiagonala este un caz particular pentru banded matrices (matrice formata din benzi adica din mai multe diagonale, celelalte elemente fiind 0)
     # am putea folosi functia scipy.linalg.solve_banded pentru a rezolva sistemul Ax=b
     # https://docs.scipy.org/doc/scipy/reference/generated/scipy.linalg.solve_banded.html
     # dar stim ca A este si o matrice Hermitiana pozitiv definita -> simplificam problema
