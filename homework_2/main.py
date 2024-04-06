@@ -8,12 +8,12 @@ import timeit
 
 
 def main():
-    seed = 33
+    # general configurations
+    seed = 13
     np.random.seed(seed)
 
     output_dir = './outputs'
 
-    # general configurations
     n = 10 ** 3
     mean = 0.0
     sigma = 5.0
@@ -21,13 +21,13 @@ def main():
     p = 0.5
     b = 1.0
     epsilon = 10 ** -6
+    lambda_values = [1, 5.5, 10, 14, 30, 100]
+    D_matrix = generate_D_matrix(n)
 
     # punctul a)
     x, y, z, v = generate_inputs(x_init, n, mean, sigma, p, b, output_dir)
 
     # punctul b)
-    D_matrix = generate_D_matrix(n)
-    lambda_values = [1, 5, 10, 15, 20, 100]
     x_star_cvxpy = {}
     for lambda_value in lambda_values:
         x_star_cvxpy[lambda_value] = generate_trend_using_cvxpy(y, D_matrix, lambda_value, epsilon)
@@ -40,6 +40,22 @@ def main():
                                     'y_label': 'Trend'},
                        file_name='summary.png',
                        output_dir=os.path.join(output_dir, 'l1_filtering_with_cvxpy'))
+
+    # punctul c)
+    x_star_l1={}
+    for lambda_value in lambda_values:
+        print(lambda_value)
+        x_star_l1[lambda_value]=generate_trend_with_l1_filter(y, D_matrix, lambda_value, epsilon)
+    save_data_to_pickle_file(data={'lambda_to_trend_star_dict': x_star_l1},
+                             file_name='data.pickle',
+                             output_dir=os.path.join(output_dir, 'l1_filtering_my_implementation'))
+    plot_optimal_trend(lambda_to_trend_star_dict=x_star_l1,
+                       original_trend=x,
+                       plot_params={'title': 'L-1 filtering (my implementation) vs original trend',
+                                    'x_label': 'Time',
+                                    'y_label': 'Trend'},
+                       file_name='summary.png',
+                       output_dir=os.path.join(output_dir, 'l1_filtering_my_implementation'))
 
     # punctul d)
     x_star_hp = {}
@@ -55,6 +71,125 @@ def main():
                                     'y_label': 'Trend'},
                        file_name='summary.png',
                        output_dir=os.path.join(output_dir, 'efficient_hp_filtering'))
+
+    # punctul e)
+    # TODO
+
+
+def generate_trend_with_l1_filter(y, D_matrix, lambda_value, epsilon):
+    if not (type(y) is np.ndarray and y.ndim == 1):
+        raise ValueError('parameter y should be a 1D numpy array!')
+    n = y.shape[0]
+    if not (type(D_matrix) is np.ndarray and D_matrix.shape == (n - 2, n)):
+        raise ValueError('parameter D_matrix should be a 2D numpy array with shape (n-2,n), where n=y.shape[0]!')
+
+    # intai implementez algoritmul cu cvxpy
+    # utilizez aceste rezultate pentru a ma verifica
+    x_star_cvxpy, miu_star_cvxpy = generate_trend_with_l1_filter_cvxpy(y, D_matrix, lambda_value, epsilon)
+
+    # implementez pseudocodul din pdf utilizand gradient descent
+    L = calculate_L_for_t1_filter(D_matrix)
+    alpha = 2.0 / L * 0.9
+    x_star_my_solution, miu_star_my_solution, _ = generate_trend_with_l1_filter_gradient_descent(y,
+                                                                                                 D_matrix,
+                                                                                                 lambda_value,
+                                                                                                 alpha,
+                                                                                                 epsilon)
+
+    # testez x_star din implementarea mea cu x_star obtinuta cu cvxpy
+    # folosesc atol=10 ** -3 si rtol=10 ** -3 deoarece implementarea mea e mai exacta ca cea facuta cu cvxpy
+    assert np.allclose(x_star_cvxpy, x_star_my_solution, atol=10 ** -3, rtol=10 ** -3)
+
+    # arat ca implementarea proprie este chiar mai exacta decat cea realizata de cvxpy
+    miu_star_cvxpy_gradient = gradient_trend_with_l1(miu_star_cvxpy, y, D_matrix)
+    miu_star_my_solution_gradient = gradient_trend_with_l1(miu_star_my_solution, y, D_matrix)
+    #assert np.linalg.norm(miu_star_my_solution_gradient) < np.linalg.norm(miu_star_cvxpy_gradient)
+
+    miu_star_cvxpy_modified_gradient = modified_gradient_trend_with_l1(miu_star_cvxpy, miu_star_cvxpy_gradient, alpha,
+                                                                       lambda_value)
+    miu_star_my_solution_modified_gradient = modified_gradient_trend_with_l1(miu_star_my_solution,
+                                                                             miu_star_my_solution_gradient, alpha,
+                                                                             lambda_value)
+
+    assert np.linalg.norm(miu_star_my_solution_modified_gradient) < np.linalg.norm(miu_star_cvxpy_modified_gradient)
+
+    return x_star_my_solution
+
+
+def calculate_L_for_t1_filter(D_matrix):
+    rows, cols = D_matrix.shape
+
+    hessian_matrix = D_matrix.dot(D_matrix.transpose())
+    assert hessian_matrix.shape == (rows, rows)
+    assert np.allclose(hessian_matrix, hessian_matrix.transpose())
+
+    eigenvalues = np.linalg.eigvals(hessian_matrix)
+    assert np.all(eigenvalues > 0)
+    L = np.max(eigenvalues)
+
+    return L
+
+
+def projection(miu, lambda_value):
+    return np.maximum(-lambda_value, np.minimum(lambda_value, miu))
+
+
+def modified_gradient_trend_with_l1(miu, gradient, alpha, lambda_value):
+    modified_gradient = (1 / alpha) * (miu - projection(miu - alpha * gradient, lambda_value))
+
+    return modified_gradient
+
+
+def generate_trend_with_l1_filter_gradient_descent(y, D_matrix, lambda_value, alpha, epsilon):
+    n = y.shape[0]
+    assert D_matrix.shape == (n - 2, n)
+
+    iterations = 0
+    miu_current = np.zeros(shape=n - 2)
+
+    while True:
+        gradient = gradient_trend_with_l1(miu_current, y, D_matrix)
+        modified_gradient = modified_gradient_trend_with_l1(miu_current, gradient, alpha, lambda_value)
+
+        modified_gradient_norm = np.linalg.norm(modified_gradient)
+        if modified_gradient_norm < epsilon:
+            break
+
+        miu_current -= alpha * gradient
+        miu_current = projection(miu_current, lambda_value)
+
+        iterations += 1
+
+    miu_star = miu_current
+    x_star = y - D_matrix.transpose().dot(miu_star)
+
+    return x_star, miu_star, iterations
+
+
+def gradient_trend_with_l1(miu, y, D_matrix):
+    gradient = D_matrix.dot(D_matrix.transpose().dot(miu) - y)
+
+    return gradient
+
+
+def generate_trend_with_l1_filter_cvxpy(y, D_matrix, lambda_value, epsilon):
+    def objective_function(miu, D_matrix, y):
+        function = 0.5 * cp.norm(D_matrix.T @ miu) ** 2 - cp.sum(cp.multiply(miu, D_matrix @ y))
+        return function
+
+    n = y.shape[0]
+    miu = cp.Variable(shape=n - 2)
+    min_of_objective_function = cp.Minimize(objective_function(miu, D_matrix, y))
+    constraints = [miu >= -lambda_value, miu <= lambda_value]
+    problem = cp.Problem(min_of_objective_function, constraints)
+    solver_parameters = {'abstol': epsilon, 'reltol': epsilon}
+    problem.solve(solver=cp.ECOS, **solver_parameters)
+    assert problem.status == 'optimal'
+
+    miu_star = miu.value
+    x_star = y - D_matrix.transpose().dot(miu_star)
+
+    return x_star, miu_star
 
 
 def generate_trend_using_hp_filter(y, D_matrix, lambda_value):
@@ -201,15 +336,15 @@ def generate_inputs(x_init, n, mean, sigma, p, b, output_dir=None):
     z = np.random.normal(mean, sigma, size=n)
     v = np.zeros(shape=n)
 
-    v[0] = np.random.uniform(low=0.0, high=1.0)
+    # generez pentru v din intervalul [-b,b) ca seria lui x sa poata si descreste in timp
+    # daca faceam np.random.uniform() generarea se facea doar din intervalul [0,1), iar seria lui x nu avea cum sa scada in timp (doar crestea)
+    v[0] = np.random.uniform(low=-b, high=b)
     for time_step in range(1, v.shape[0]):
         random_prob = np.random.uniform(low=0.0, high=1.0)
 
         if 0 <= random_prob < p:
             v[time_step] = v[time_step - 1]
         else:
-            # generez din intervalul [-b,b) ca seria lui x sa poata si descreste in timp
-            # daca faceam np.random.uniform() generarea se facea doar din intervalul [0,1), iar seria lui x nu avea cum sa scada in timp (doar crestea)
             v[time_step] = np.random.uniform(low=-b, high=b)
 
         x[time_step] = x[time_step - 1] + v[time_step - 1]
