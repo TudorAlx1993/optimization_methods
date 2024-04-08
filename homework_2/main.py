@@ -4,7 +4,6 @@ import pickle
 import cvxpy as cp
 import numpy as np
 import matplotlib.pyplot as plt
-import timeit
 
 
 def main():
@@ -127,7 +126,7 @@ def generate_trend_with_l1_filter(y, D_matrix, lambda_value, epsilon, method):
     x_star_cvxpy, miu_star_cvxpy = generate_trend_with_l1_filter_cvxpy(y, D_matrix, lambda_value, epsilon)
 
     # implementez pseudocodul din pdf utilizand gradient descent
-    L = calculate_L_for_t1_filter(D_matrix)
+    L = calculate_L_for_l1_filter(D_matrix)
     alpha = 2.0 / L * 0.9
     x_star_my_solution, miu_star_my_solution, _ = generate_trend_with_l1_filter_gradient_descent(y,
                                                                                                  D_matrix,
@@ -143,20 +142,18 @@ def generate_trend_with_l1_filter(y, D_matrix, lambda_value, epsilon, method):
     # arat ca implementarea proprie este chiar mai exacta decat cea realizata de cvxpy
     miu_star_cvxpy_gradient = gradient_trend_with_l1(miu_star_cvxpy, y, D_matrix)
     miu_star_my_solution_gradient = gradient_trend_with_l1(miu_star_my_solution, y, D_matrix)
-    # assert np.linalg.norm(miu_star_my_solution_gradient) < np.linalg.norm(miu_star_cvxpy_gradient)
 
     miu_star_cvxpy_modified_gradient = modified_gradient_trend_with_l1(miu_star_cvxpy, miu_star_cvxpy_gradient, alpha,
                                                                        lambda_value)
     miu_star_my_solution_modified_gradient = modified_gradient_trend_with_l1(miu_star_my_solution,
                                                                              miu_star_my_solution_gradient, alpha,
                                                                              lambda_value)
-
     assert np.linalg.norm(miu_star_my_solution_modified_gradient) < np.linalg.norm(miu_star_cvxpy_modified_gradient)
 
     return x_star_my_solution
 
 
-def calculate_L_for_t1_filter(D_matrix):
+def calculate_L_for_l1_filter(D_matrix):
     rows, cols = D_matrix.shape
 
     hessian_matrix = D_matrix.dot(D_matrix.transpose())
@@ -276,7 +273,7 @@ def generate_trend_using_hp_filter(y, D_matrix, lambda_value):
     A = np.eye(n) + 2 * lambda_value * D_matrix.transpose().dot(D_matrix)
     b = y
 
-    # cate va observatii despre matricea A:
+    # cateva observatii despre matricea A:
     # A este o matrice definita pe multimea numerelor reale
     assert A.dtype == 'float64'
     # deoarece D este o matrice cu shape (n-2,n) -> A este o matrice cu shape (n,n)
@@ -343,7 +340,7 @@ def generate_trend_using_hp_filter(y, D_matrix, lambda_value):
 def plot_optimal_trend(lambda_to_trend_star_dict, original_trend, plot_params, file_name, output_dir):
     if type(lambda_to_trend_star_dict) is not dict:
         raise ValueError(
-            'parameter lambda_to_trend_star_dict should be a dict where the keys are the are related to the smoothing parameter and the values are related to the optimal trends!')
+            'parameter lambda_to_trend_star_dict should be a dict where the keys are related to the smoothing parameter and the values are related to the optimal trends!')
 
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
@@ -351,17 +348,21 @@ def plot_optimal_trend(lambda_to_trend_star_dict, original_trend, plot_params, f
     if not file_name.endswith('png'):
         file_name += '.png'
 
-    fig, ax = plt.subplots(figsize=(15, 8))
-    for lambda_value, optimal_trend in lambda_to_trend_star_dict.items():
-        ax.plot(optimal_trend, label='lambda={}'.format(lambda_value))
-    ax.plot(original_trend, label='original trend', linewidth=3.0)
-    ax.legend()
+    lambda_values = sorted(list(lambda_to_trend_star_dict.keys()))
+    fig, axes = plt.subplots(nrows=len(lambda_values), ncols=1, figsize=(8, 20))
+    for lambda_value, ax in zip(lambda_values, axes):
+        optimal_trend = lambda_to_trend_star_dict[lambda_value]
+        ax.plot(optimal_trend, label='Fitted trend')
+        ax.plot(original_trend, label='Original trend')
+        ax.set_title('Smoothing parameter: lambda={}'.format(lambda_value))
+        ax.legend()
+        if 'x_label' in plot_params.keys():
+            ax.set_xlabel(plot_params['x_label'])
+        if 'y_label' in plot_params.keys():
+            ax.set_ylabel(plot_params['y_label'])
     if 'title' in plot_params.keys():
-        ax.set_title(plot_params['title'])
-    if 'x_label' in plot_params.keys():
-        ax.set_xlabel(plot_params['x_label'])
-    if 'y_label' in plot_params.keys():
-        ax.set_ylabel(plot_params['y_label'])
+        fig.suptitle(plot_params['title'])
+    fig.tight_layout(rect=[0, 0.02, 1, 0.98])
     fig.savefig(os.path.join(output_dir, file_name))
 
 
